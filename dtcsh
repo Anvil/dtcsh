@@ -1,0 +1,559 @@
+#!/usr/bin/env zsh
+#
+#
+
+
+# Directories in dsh group tree we want to avoid.
+EXCLUDED_DIRS_LIST=(CVS .svn .bzr .bzrroot)
+
+#
+EXCLUDED_FILES_LIST=( '*~' ALL )
+
+
+IFS="|$IFS"
+EXCLUDED_DIRS="(${EXCLUDED_DIRS_LIST[*]})"
+EXCLUDED_FILES="(${EXCLUDED_FILES_LIST[*]})"
+IFS="${IFS[2,-1]}"
+
+#
+DSH_GROUPS_DIRECTORIES=( ~/.dsh/group /etc/dsh/group )
+
+setopt extendedglob
+setopt rematchpcre >/dev/null 2>&1 ||:
+setopt nullglob
+unsetopt functionargzero
+
+zmodload zsh/mapfile
+
+print_array() {
+	# Prints all parameters, one per line.
+	[[ $# -ne 0 ]] || return
+	printf "%s\n" "$@"
+}
+
+glob_me_this() {
+	# Resets the glob_result array, then performs globbing in given
+	# directories, and puts the globbing results in the glob_result
+	# array.
+	# @param A zsh-styled extended globbing pattern.
+	# @params a list of directories to perform globbing into.
+	local pattern=$1
+	shift
+	local d
+	[[ -n "$keep_globing" ]] || glob_result=()
+	if [[ "$pattern" = */* ]]
+	then
+		pattern="${pattern%/*}/(${pattern##*/}~$EXCLUDED_FILES)~((**/|)$EXCLUDE_DIRS(/*|))"
+	else
+		pattern="($pattern~$EXCLUDED_FILES)~((**/|)$EXCLUDE_DIRS(/*|))"
+	fi
+	# Only glob regular files. No symlink allowed, since it may lead
+	# to random behaviour.
+	pattern="$pattern(-.)"
+	for d in "$@"
+	do
+		[[ -d "$d" ]] && cd "$d" >/dev/null || continue
+		glob_result+=( ${~pattern} )
+		cd - >/dev/null || return 1
+	done
+}
+
+add_globbed_dsh_params() {
+	# This function performs glob on its second parameter and ADDS the
+	# found values to the 'dsh_params' array along with -g/-f.
+	# @param A dsh option. Either -f or -g. Anything else will make
+	# the script (violently) abort.
+	# @param The option value. Should be a zsh-styled extended
+	# globbing pattern. Globbing will be performed in dsh group
+	# directories if a -g is provided. Or in matching directory if -f
+	# is provided.
+	local o=$1
+	local p=$2
+	local d g
+	local -a group_path glob_result
+	case "$o" in
+		-g|--group)
+			group_path=( "${DSH_GROUPS_DIRECTORIES[@]}" )
+			;;
+		-f|--file)
+			[[ "$p[1]" = / ]] && group_path=(/) || group_path=(.)
+			;;
+		*)
+			echo Something is fucked here... Please report a bug. Arg. Arg.
+			exit 1
+			;;
+	esac
+	glob_me_this "$p" "${group_path[@]}"
+	# We got something. Add it to dsh parameters.
+	if [[ "${#glob_result[@]}" -ne 0 ]]
+	then
+		dsh_params+=( "${glob_result[@]/#/$o}" )
+		return 0
+	fi
+	echo "${0##*/}: $p: computed pattern returned nothing."
+	exit 1
+}
+
+dsh_options() {
+	# This function SETS the 'params' array with the list of dsh.
+	# options (either short or long, with or without value).
+	# @param either 'yes', if you want options with value. Anything
+	# else if you want options without value.
+	# @param either short or long.
+	# @return 0
+	[[ $# -ne 2 ]] && return 1
+	local with_argument=$1
+	local short_long=$2
+	local regexp_2nd_part regexp_field
+	if [[ "$with_argument" = yes ]]
+	then
+		regexp_2nd_part=".\+\[.\+"
+	else
+		regexp_2nd_part="[^[]\+"
+	fi
+	case "$short_long" in
+		short)
+			regexp_field="\1"
+			;;
+		long)
+			regexp_field="\2"
+			;;
+		*)
+			: ....
+			return 1
+			;;
+	esac
+
+	params=( $(command dsh --help | sed -n \
+		"s/^\(-.\) \(--[^ ]\+\)$regexp_2nd_part$/$regexp_field/p") )
+	return 0
+}
+
+getopt_params() {
+	# Prints the argument string required for getopt to parse dsh
+	# options (either long or short options, according to given
+	# parameter).
+	# @param either short or long.
+	# @return 1 if something bad happens.
+	[[ $# -ne 1 ]] && return 1
+	local short_long=$1
+	local -a params
+	local sep
+	case "$short_long" in
+		short)
+			sep=''
+			;;
+		long)
+			sep=,
+			;;
+		*)
+			return 1
+			;;
+	esac
+	dsh_options yes "$short_long"
+	printf "%s:$sep" "${params[@]##(-)##}"
+	dsh_options no "$short_long"
+	printf "%s$sep" "${params[@]##(-)##}"
+	printf "\n"
+}
+
+option_parsing_case() {
+	# Prints a pattern string, suitable for case statement and
+	# matching dsh options.
+	# @param either yes or no, depending if you want options with
+	# value or not.
+	# @return 0
+	[[ $# -ne 1 ]] && return 1
+	local with_argument=$1
+	local -a a
+	dsh_options "$with_argument" short
+	a=( "${params[@]}" )
+	dsh_options "$with_argument" long
+	a+=( "${params[@]}" )
+	local IFS="|$IFS"
+	echo "${a[*]}"
+}
+
+usage() {
+	if command -v dsh >/dev/null 2>&1
+	then
+		printf "DTCsh-wrapped "
+		command dsh --help
+	else
+		printf "DTCsh can act as a wrapper over dsh if you can install dsh.\n"
+	fi
+	cat <<EOF
+Alternative syntaxes in which none of the above options apply:
+
+dtcsh ls 'group_pattern'
+
+	Prints the dsh group names matching given pattern.
+
+dtcsh cat 'group_pattern'
+
+	Prints the (uniq) hostnames contained in dsh group names
+	matching given pattern.
+
+dtcsh match 'hostname_regexp' [ 'group' ]
+
+	Prints dsh group names containing hostnames matching given 'grep
+	-E'-styled regular expression. If given, 'group' represents the
+	beginning of a dsh group name, restricting the research to that
+	'group' tree.
+
+dtcsh grep 'hostname_regexp' [ 'group' ]
+
+	Same as the 'match' command, but prints matching host names (and
+	not dsh groups) instead.
+
+dtcsh cssh [ <cssh option> ... ] '[login@](group|file|regexp|hostname)[:port]'
+
+	Acts like cssh. Parameters can be either dsh groups, file names,
+	hostname regular expression pattern or plain host names, with
+	optional '<username>@' prefix and optional ':<port number>'
+	suffix.  If 'dtcsh' is called as 'cssh' or 'dcssh', 'dtcsh' acts
+	as if called as 'dtcsh cssh'.
+
+dtcsh clean-keys '(group|regexp|hostname)'
+
+	Remove entries from your ~/.ssh/known_hosts file. Parameters can be
+	either dsh groups, hostname or hostname regular expressions. The
+	IP address will also be removed from the known_hosts file.
+
+dtcsh update-keys '(group|regexp|hostname)'
+
+	Like clean-keys action but also attempt to connect the expanded
+	list of hostnames so that latest version of host keys will be
+	re-added to the known_hosts file.
+
+dtcsh remove 'regexp'
+
+	Removes all hostnames matching given regular expression from dsh
+	groups.
+
+dtcsh whatever '(group|regexp|hostname)'
+
+	Expands arguments into a list of host names, whatever their
+	nature: group pattern, host name regular expression or plain host
+	name. It's the exact same subroutines used in clean-keys,
+	update-keys and in the cssh wrapper.
+
+EOF
+	exit 1
+}
+
+run_dsh() {
+	# This function actually runs the dsh binary.
+	# All parameters of the function are re-given to dsh as is, with
+	# the exception of -f and -g values, which are globbed first.
+	local TEMP single dual
+	# dsh parameters for final invokation.
+	local -a dsh_params hostnames
+
+	[[ $# -eq 0 ]] && usage
+
+	TEMP=$( POSIXLY_CORRECT=1 getopt -n "${0##*/}" -s bash --longoptions \
+		"$(getopt_params long)" "$(getopt_params short)" "$@" ) || usage
+	
+	eval set -- "$TEMP"
+	
+	single="($(option_parsing_case no))"
+	dual="$(option_parsing_case yes)"
+	
+	while :
+	do
+		case "$1" in
+			-[fg]|--file|--group)
+				add_globbed_dsh_params "$1" "$2"
+				shift 2
+				;;
+			-[mx]|--machine|--exclude)
+				if hostnames=( $(_dtcsh_grep -h "${2#*@}") )
+				then
+					if [[ "$2" =~ ^(.*@).*$ ]]
+					then
+						hostnames=( "${hostnames[@]/#/${match[1]}}" )
+					fi
+					hostnames=( "${(u)hostnames[@]}" )
+				else
+					hostnames=( "$2" )
+				fi
+				IFS=",$IFS"
+				dsh_params+=( "$1" "${hostnames[*]}" )
+				IFS="${IFS[2,-1]}"
+				shift 2
+				;;
+			-h|--help)
+				# Specific case, so that we print a little more than dsh
+				# help message to advert user he's being wrapped.
+				usage
+				;;
+			${~single})
+				dsh_params+=("$1")
+				shift
+				;;
+			${~dual})
+				dsh_params+=("$1" "$2")
+				shift 2
+				;;
+			--)
+				break
+				;;
+			*)
+				# Either dsh -h message syntax changed, either
+				# something is really screwed up.
+				echo This is a fscking bug.
+				exit 1
+				;;
+		esac
+	done
+	exec command dsh "$dsh_params[@]" "$@"
+}
+
+__get_machine_list() {
+	local d i f
+	for d in "${DSH_GROUPS_DIRECTORIES[@]}"
+	do
+		for i in "$@"
+		do
+			glob_me_this "$i" "$d"
+			if cd "$d" >/dev/null 2>&1
+			then
+				for f in "${glob_result[@]}"
+				do
+					machine_list+=( "${(f)mapfile[$f]}" )
+				done
+			fi
+			cd - >/dev/null 2>&1 || cd / >/dev/null 2>&1
+		done
+	done
+	# Prune empty elements.
+	machine_list=( "${(M)machine_list[@]:#?*}" )
+	# Prune comments
+	machine_list=( "${machine_list[@]:# #\#*}" )
+}
+
+dtcsh_cat() {
+	local -a machine_list
+	machine_list=()
+	__get_machine_list "$@"
+	print_array "${(u)machine_list[@]}"
+}
+
+dtcsh_ls() {
+	[[ $# -eq 0 ]] && set -- '*'
+	local i
+	local -a glob_result
+	for i in "$@"
+	do
+		keep_globing=1
+		glob_me_this "$i" "${DSH_GROUPS_DIRECTORIES[@]}"
+	done
+	print_array "${(u)glob_result[@]}"
+}
+
+__expand_random() {
+	# Try expanding argument (dsh group patterns, hostname regexps,
+	# plain hostnames) to get an host list. If with_files is set to
+	# non-empty value, also consider file names.
+	local arg
+	local -a hosts machine_list
+	__expand_random_result=()
+	for arg in "$@"
+	do
+		machine_list=()
+		__get_machine_list "$arg"
+		if [[ "${#machine_list[@]}" -ne 0 ]]
+		then
+			# It was indeed a dsh group pattern.
+			__expand_random_result+=( "${machine_list[@]}" )
+		elif [[ -n "$with_files" && -f "$arg" ]]
+		then
+			# It was actually a file name
+			hosts=( "${(@f)mapfile[$host]}" )
+			__expand_random_result+=( "${(M)hosts[@]:#?*}" )
+		elif hosts=( $( _dtcsh_grep -h "$arg" ) ) && \
+			[[ "${#hosts[@]}" -ne 0 ]]
+		then
+			# It was neither a dsh group nor a file. It was actually
+			# an hostname regexp.
+			__expand_random_result+=( "${(o)hosts[@]}" )
+		else
+			# Or nothing of the above. Leave param as is.
+			__expand_random_result+=( "$arg" )
+		fi
+	done
+}
+
+dtcsh_clean_keys() {
+    local host ip
+	local -a __expand_random_result
+	__expand_random_result=()
+	__expand_random "$@"
+    for host in "${(u)__expand_random_result[@]}"
+    do
+		printf "Removing: "
+		for ip in "$host" $(host "$host" 2>/dev/null | sed -n \
+			"s/^.\+ *\(has address\| A \|is an alias for\|CNAME\) *//p")
+			do
+			printf %s\  "${ip%.}"
+			ssh-keygen -R "${ip%.}" >/dev/null 2>&1
+		done
+		printf \\n
+    done
+	if [[ -n "$update_knownhost" ]]
+	then
+		command dsh -F 10 -c -o-oStrictHostKeyChecking=no \
+			-o-oBatchMode=yes -o-oConnectTimeout=5 \
+			"${__expand_random_result[@]/#/-m}" echo Updated
+	fi
+}
+
+dtcsh_update_keys() {
+	update_knownhost=1 dtcsh_clean_keys "$@"
+}
+
+dtcsh_remove() {
+	[[ $# -eq 1 ]] || return 1
+	local regexp=$1
+	local d f
+	for d in "${DSH_GROUPS_DIRECTORIES[@]}"
+	do
+		sed -i /"$regexp"/ "$d"/**/*(.)
+		f="$d/../machines.list"
+		[[ -e "$f" ]] || continue
+		sed -i /"$regexp"/ "$f"
+	done
+}
+
+_dtcsh_grep() {
+	local grepflag=$1
+	local regexp=$2
+	local restriction=$3
+	local d exit_value=
+	for d in "${DSH_GROUPS_DIRECTORIES[@]}" \
+		"${DSH_GROUPS_DIRECTORIES[@]/%//../machines.list}"
+	do
+		[[ -e "$d" ]] || continue
+		# serveur, domaine and site are excluded. (unilateral decision).
+		grep </dev/null 2>/dev/null -E "${EXCLUDED_FILES_LIST[@]/#/--exclude=}" \
+			--exclude-dir serveur --exclude-dir domaine --exclude-dir site \
+			"${EXCLUDED_DIRS_LIST[@]/#/--exclude-dir=}" -R "$grepflag" "$regexp" \
+			"$d${restriction:+/$restriction}" | sed "s#^$d/\+##"
+		[[ "${pipestatus[1]}" -eq 0 ]] && exit_value=0
+	done
+	return "${exit_value:-1}"
+}
+
+cssh_getopt_params() {
+	local optline options param
+	local -a csshhelp longs
+	csshhelp=( ${(M)${(f)"$(cssh --help)"}:#    --*} )
+	csshhelp=( "${csshhelp[@]## ##}" )
+	for optline in "${csshhelp[@]}"
+	do
+		read options param <<<"$optline"
+		[[ -n "$param" ]] && param=:
+		while [[ "$options" =~ ^--([^,]+),-(.)(.*)$ ]]
+		do
+			longs+=( "${match[1]}$param" )
+			cssh_getopt_shorts="$cssh_getopt_shorts${match[2]}$param"
+			options=${match[3]}
+		done
+	done
+	local IFS=,
+	cssh_getopt_longs="${longs[*]}"
+}
+
+usage_cssh() {
+	exec cssh --help
+}
+
+run_dcssh() {
+	local param temp cssh_getopt_longs cssh_getopt_shorts
+	local -a cssh_options machines __expand_random_result
+	cssh_getopt_params
+
+	temp=$( getopt -n "${0##*/}" -s bash \
+		--longoptions "$cssh_getopt_longs" \
+		"$cssh_getopt_shorts" "$@" ) || usage_cssh
+
+	eval set -- "$temp"
+
+	while [[ "$1" != -- ]]
+	do
+		cssh_options+=( "$1" )
+		shift
+	done
+	shift
+
+	for param in "$@"
+	do
+		if [[ ! "$param" =~ ^(.+@)?([^@:]+)(:.+)?$ ]]
+		then
+			printf "%s: doesnt match .+ ? Weird.\n" "$param"
+			continue
+		fi
+		userat=${match[1]}
+		host=${match[2]}
+		port=${match[3]}
+		__expand_random_result=()
+		with_files=1 __expand_random "$host"
+		# Re-set login and port.
+		__expand_random_result=( "${(u)__expand_random_result[@]}" )
+		__expand_random_result=( "${__expand_random_result[@]/%/$port}" )
+		machines+=( "${__expand_random_result[@]/#/$userat}" )
+	done
+	exec command cssh "${cssh_options[@]}" -- "${machines[@]}"
+}
+
+case "${0##*/}" in
+	cssh|dcssh)
+		run_dcssh "$@"
+		;;
+	dsh)
+		run_dsh "$@"
+		;;
+	*)
+		case "$1" in
+			ls|cat|clean-keys|update-keys|remove)
+				cmd=${1//-/_} ; shift
+				"dtcsh_$cmd" "$@"
+				;;
+			match)
+				shift
+				_dtcsh_grep -l "$@"
+				;;
+			grep)
+				shift
+				_dtcsh_grep -h "$@" | sort -u
+				exit "$pipestatus[1]"
+				;;
+			whatever)
+				shift
+				__expand_random "$@" && \
+					printf %s\\n "${(u)__expand_random_result[@]}"
+				;;
+			printf)
+				# Undocumented until i'm clear about that.
+				shift
+				m=( $(dtcsh_cat "$1") )
+				n=( "${(u)m[@]/[0-9][0-9][0-9]/%03d}" )
+				[[ ${#n[@]} -ne 1 ]] && exit 1
+				if [[ $# -eq 1 ]]
+				then
+					printf "%s\n" "${n[@]}"
+				else
+					printf "${n[@]}" "$2"
+				fi
+				;;
+			cssh|dcssh)
+				shift
+				run_dcssh "$@"
+				;;
+			*)
+				run_dsh "$@"
+				;;
+		esac
+		;;
+esac
