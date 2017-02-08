@@ -4,7 +4,7 @@
 
 
 # Directories in dsh group tree we want to avoid.
-EXCLUDED_DIRS_LIST=(CVS .svn .bzr .bzrroot)
+EXCLUDED_DIRS_LIST=(CVS .svn .bzr .bzrroot .git)
 
 #
 EXCLUDED_FILES_LIST=( '*~' ALL )
