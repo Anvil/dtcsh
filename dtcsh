@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-#
+# -*- tab-width: 4; encoding: utf-8; -*-
 #
 
 
@@ -417,12 +417,14 @@ dtcsh_remove() {
 	[[ $# -eq 1 ]] || return 1
 	local regexp=$1
 	local d f
+	local -a files
 	for d in "${DSH_GROUPS_DIRECTORIES[@]}"
 	do
-		sed -i /"$regexp"/ "$d"/**/*(.)
+		files=( "$d"/**/*(.) )
+		[[ "${#files[@]}" -gt 0 ]] && sed -i /"$regexp"/d "$d"/**/*(.)
 		f="$d/../machines.list"
-		[[ -e "$f" ]] || continue
-		sed -i /"$regexp"/ "$f"
+		[[ -f "$f" && -w "$f" ]] || continue
+		sed -i /"$regexp"/d "$f"
 	done
 }
 
