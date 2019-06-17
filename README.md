@@ -19,7 +19,7 @@ However, it still relies on the original dsh.
 
 ## Prerequisites
 
-You need to install `zsh`, `dsh` and `cssh` first of all.
+You need to install `zsh`, `dsh`, `rsh` (for default rsh communication) and `cssh` (for interactive shells) first of all.
 
 ## dtcsh installation
 
@@ -28,6 +28,8 @@ Get (git clone, or copy) the `dtcsh` script from this repository, and place it s
 ## Configuration
 
 Just use `dsh` configuration.
+
+Use `man dsh.conf` for detailled information.
 
 # DSH enhancements
 
