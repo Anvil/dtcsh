@@ -13,6 +13,24 @@ It's technically safe to do
 alias dsh=dtcsh
 ```
 
+However, it still relies on the original dsh.
+
+# How to install it ?
+
+## Prerequisites
+
+You need to install `zsh`, `dsh`, `rsh` (for default rsh communication) and `cssh` (for interactive shells) first of all.
+
+## dtcsh installation
+
+Get (git clone, or copy) the `dtcsh` script from this repository, and place it somewhere in your `$PATH`.
+
+## Configuration
+
+Just use `dsh` configuration.
+
+Use `man dsh.conf` for detailled information.
+
 # DSH enhancements
 
 Imagine you have multiple node00{1,2,3,...}.mydomain servers located in multiple group files and you want to contact them.
