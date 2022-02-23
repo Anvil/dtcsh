@@ -19,7 +19,9 @@ However, it still relies on the original dsh.
 
 ## Prerequisites
 
-You need to install `zsh`, `dsh`, `rsh` (for default rsh communication) and `cssh` (for interactive shells) first of all.
+You need to install `zsh`, `dsh`, and `cssh` (for interactive shells) first of all.
+
+Note that your cssh package is probably named `clusterssh`
 
 ## dtcsh installation
 
